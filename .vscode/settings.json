@@ -1,0 +1,12 @@
+{
+    "platformio-ide.useBuiltinPIOCore": false,
+    "platformio-ide.customPATH": "C:\\Users\\ITANPEL3\\progetti\\wifi6_sensor\\.venv\\Scripts",
+    "terminal.integrated.env.windows": {
+        "MSYSTEM": null
+    },
+    "git.repositoryScanIgnoredFolders": [
+        "node_modules",
+        ".pio-core",
+        ".pio"
+    ]
+}

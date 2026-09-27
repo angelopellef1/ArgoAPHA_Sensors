@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="420" viewBox="0 0 640 420" font-family="Segoe UI, Arial, sans-serif" font-size="14">
+  <rect width="640" height="420" fill="#ffffff"/>
+  <text x="320" y="30" text-anchor="middle" font-size="18" font-weight="bold">Reed switch wiring - XIAO ESP32-C5</text>
+
+  <!-- Board -->
+  <rect x="40" y="60" width="220" height="260" rx="10" fill="#e8f0fe" stroke="#1a73e8" stroke-width="2"/>
+  <text x="150" y="85" text-anchor="middle" font-weight="bold">XIAO ESP32-C5</text>
+
+  <!-- 3V3 and internal pull-up -->
+  <text x="60" y="125">3V3</text>
+  <line x1="190" y1="120" x2="190" y2="145" stroke="#888" stroke-width="2" stroke-dasharray="4 3"/>
+  <rect x="180" y="145" width="20" height="45" fill="#fff" stroke="#888" stroke-width="2" stroke-dasharray="4 3"/>
+  <text x="70" y="165" fill="#666" font-size="12">internal pull-up</text>
+  <text x="70" y="180" fill="#666" font-size="12">~45 kΩ (firmware)</text>
+  <line x1="190" y1="190" x2="190" y2="210" stroke="#888" stroke-width="2" stroke-dasharray="4 3"/>
+  <line x1="100" y1="120" x2="190" y2="120" stroke="#888" stroke-width="2" stroke-dasharray="4 3"/>
+
+  <!-- D1 pin -->
+  <text x="60" y="215">D1 (GPIO0)</text>
+  <circle cx="260" cy="210" r="6" fill="#d93025"/>
+  <line x1="190" y1="210" x2="260" y2="210" stroke="#888" stroke-width="2" stroke-dasharray="4 3"/>
+
+  <!-- GND pin -->
+  <text x="60" y="295">GND</text>
+  <circle cx="260" cy="290" r="6" fill="#202124"/>
+
+  <!-- Wires -->
+  <polyline points="260,210 420,210 420,225" fill="none" stroke="#d93025" stroke-width="3"/>
+  <polyline points="260,290 420,290 420,275" fill="none" stroke="#202124" stroke-width="3"/>
+
+  <!-- Reed switch (glass tube with open contacts) -->
+  <rect x="395" y="225" width="50" height="50" rx="12" fill="#f1f3f4" stroke="#5f6368" stroke-width="2"/>
+  <line x1="420" y1="225" x2="420" y2="245" stroke="#5f6368" stroke-width="3"/>
+  <line x1="420" y1="275" x2="432" y2="252" stroke="#5f6368" stroke-width="3"/>
+  <text x="460" y="245" font-weight="bold">REED (NO)</text>
+  <text x="460" y="262" font-size="12" fill="#666">no polarity</text>
+
+  <!-- Magnet -->
+  <rect x="540" y="225" width="60" height="50" fill="#fce8e6" stroke="#d93025" stroke-width="2"/>
+  <text x="570" y="255" text-anchor="middle" font-weight="bold">N | S</text>
+  <text x="570" y="295" text-anchor="middle" font-size="12">magnet</text>
+  <text x="570" y="310" text-anchor="middle" font-size="12">(on window)</text>
+  <text x="460" y="310" font-size="12">reed on frame</text>
+  <text x="500" y="215" text-anchor="middle" font-size="12" fill="#666">5-10 mm</text>
+
+  <!-- Truth table -->
+  <g font-size="13">
+    <rect x="40" y="340" width="560" height="60" fill="#fafafa" stroke="#dadce0"/>
+    <text x="60" y="362" font-weight="bold">Magnet near</text>
+    <text x="200" y="362">contact closed → D1 LOW → "closed"</text>
+    <text x="60" y="388" font-weight="bold">Magnet away</text>
+    <text x="200" y="388">contact open → D1 HIGH → "open"</text>
+  </g>
+</svg>
