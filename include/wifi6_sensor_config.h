@@ -67,7 +67,7 @@
 #define CFG_WIFI_CONNECT_TIMEOUT_MS 15000
 #define CFG_NET_FLUSH_MS            100     // let TCP drain before radio off
 
-#define CFG_MQTT_BASE_TOPIC         "wifi6_sensor"
+#define CFG_MQTT_BASE_TOPIC         "apexha_sensor"
 #define CFG_MQTT_BUFFER_SIZE        1024
 #define CFG_MQTT_RETRY_MIN_MS       2000
 #define CFG_MQTT_RETRY_MAX_MS       60000

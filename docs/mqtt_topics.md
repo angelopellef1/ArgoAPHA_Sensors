@@ -1,6 +1,6 @@
-# wifi6_sensor MQTT topics
+# apexha_sensor MQTT topics
 
-Base topic: `wifi6_sensor/<device_id>`. `<device_id>` defaults to `xiaoc5_<last 3 MAC bytes>` (e.g. `xiaoc5_a1b2c3`). Set it with `CFG_DEVICE_ID`, and change the prefix with `CFG_MQTT_BASE_TOPIC` in [include/wifi6_sensor_config.h](../include/wifi6_sensor_config.h).
+Base topic: `apexha_sensor/<device_id>`. `<device_id>` defaults to `xiaoc5_<last 3 MAC bytes>` (e.g. `xiaoc5_a1b2c3`). Set it with `CFG_DEVICE_ID`, and change the prefix with `CFG_MQTT_BASE_TOPIC` in [include/wifi6_sensor_config.h](../include/wifi6_sensor_config.h).
 
 All state messages are **retained**, so Home Assistant sees the last state right after a restart, even while the sensor sleeps.
 
@@ -8,17 +8,17 @@ All state messages are **retained**, so Home Assistant sees the last state right
 
 | Topic | Payload | Retained | Published when |
 |---|---|---|---|
-| `wifi6_sensor/<id>/availability` | `online` / `offline` | yes | `online` on every MQTT connect; `offline` is the Last Will (unclean disconnect only) |
-| `wifi6_sensor/<id>/window` | `open` / `closed` | yes | reed change (debounced), every wake-up, every heartbeat |
-| `wifi6_sensor/<id>/motion` | `detected` / `clear` | yes | IR change (debounced), every wake-up, every heartbeat |
-| `wifi6_sensor/<id>/rssi` | integer dBm, e.g. `-63` | yes | every wake-up / heartbeat / state change |
-| `wifi6_sensor/<id>/ssid` | WiFi network name, e.g. `MyHomeWiFi` | yes | every wake-up / heartbeat / state change |
-| `wifi6_sensor/<id>/ip` | IPv4 address, e.g. `192.168.1.50` | yes | every wake-up / heartbeat / state change |
-| `wifi6_sensor/<id>/mac` | WiFi station MAC, e.g. `AA:BB:CC:A1:B2:C3` | yes | every wake-up / heartbeat / state change |
-| `wifi6_sensor/<id>/version` | firmware version, e.g. `0.1` | yes | every wake-up / heartbeat / state change |
-| `wifi6_sensor/<id>/battery_voltage` | volts, 3 decimals, e.g. `3.912` | yes | every wake-up / heartbeat / state change |
-| `wifi6_sensor/<id>/battery` | integer %, `0`-`100` | yes | every wake-up / heartbeat / state change |
-| `wifi6_sensor/<id>/attributes` | JSON, see below | yes | every wake-up / heartbeat / state change |
+| `apexha_sensor/<id>/availability` | `online` / `offline` | yes | `online` on every MQTT connect; `offline` is the Last Will (unclean disconnect only) |
+| `apexha_sensor/<id>/window` | `open` / `closed` | yes | reed change (debounced), every wake-up, every heartbeat |
+| `apexha_sensor/<id>/motion` | `detected` / `clear` | yes | IR change (debounced), every wake-up, every heartbeat |
+| `apexha_sensor/<id>/rssi` | integer dBm, e.g. `-63` | yes | every wake-up / heartbeat / state change |
+| `apexha_sensor/<id>/ssid` | WiFi network name, e.g. `MyHomeWiFi` | yes | every wake-up / heartbeat / state change |
+| `apexha_sensor/<id>/ip` | IPv4 address, e.g. `192.168.1.50` | yes | every wake-up / heartbeat / state change |
+| `apexha_sensor/<id>/mac` | WiFi station MAC, e.g. `AA:BB:CC:A1:B2:C3` | yes | every wake-up / heartbeat / state change |
+| `apexha_sensor/<id>/version` | firmware version, e.g. `0.2` | yes | every wake-up / heartbeat / state change |
+| `apexha_sensor/<id>/battery_voltage` | volts, 3 decimals, e.g. `3.912` | yes | every wake-up / heartbeat / state change |
+| `apexha_sensor/<id>/battery` | integer %, `0`-`100` | yes | every wake-up / heartbeat / state change |
+| `apexha_sensor/<id>/attributes` | JSON, see below | yes | every wake-up / heartbeat / state change |
 
 Only the applications initialized in [src/main.cpp](../src/main.cpp) publish their state: `app_window_init()` publishes `window`, `app_motion_init()` publishes `motion`. The battery topics are omitted when `CFG_BATTERY_ENABLED = 0`.
 
@@ -45,7 +45,7 @@ A short motion pulse that starts and ends before MQTT reconnects is still sent a
   "boot": 3,
   "sleeps": 42,
   "sleep_mode": "light",
-  "fw": "0.1"
+  "fw": "0.2"
 }
 ```
 
@@ -69,6 +69,8 @@ With `CFG_HA_DISCOVERY = 1`, retained discovery configs are published once per p
 
 Only the entities of initialized applications are announced. If an application is removed from `main.cpp`, its entity stays in Home Assistant: delete the device entity in Home Assistant, or clear the retained config, e.g. `mosquitto_pub -r -n -t homeassistant/binary_sensor/<id>/motion/config`. With `CFG_BATTERY_ENABLED = 0` the battery entities get an empty retained config, which removes them.
 
+Up to firmware 0.1 the base topic was `wifi6_sensor`. The Home Assistant entities keep their `unique_id` and are moved to the new topics when the updated discovery is sent. The old retained messages stay on the broker; to clear them, publish an empty retained message to each topic, e.g. `mosquitto_pub -r -n -t wifi6_sensor/<id>/window`.
+
 Every entity has `expire_after = 3 x CFG_HEARTBEAT_S` (64800 s = 18 h by default). If the sensor stops reporting (flat battery, out of range), the entity turns *unavailable* even though the broker never sends the Last Will. When the device goes to sleep, it disconnects cleanly on purpose, so it is not reported as offline while sleeping.
 
 ## Manual configuration (without discovery)
@@ -77,74 +79,74 @@ Every entity has `expire_after = 3 x CFG_HEARTBEAT_S` (64800 s = 18 h by default
 mqtt:
   binary_sensor:
     - name: "Window"
-      state_topic: "wifi6_sensor/xiaoc5_a1b2c3/window"
+      state_topic: "apexha_sensor/xiaoc5_a1b2c3/window"
       payload_on: "open"
       payload_off: "closed"
       device_class: window
-      availability_topic: "wifi6_sensor/xiaoc5_a1b2c3/availability"
+      availability_topic: "apexha_sensor/xiaoc5_a1b2c3/availability"
       expire_after: 64800
-      json_attributes_topic: "wifi6_sensor/xiaoc5_a1b2c3/attributes"
+      json_attributes_topic: "apexha_sensor/xiaoc5_a1b2c3/attributes"
     # Only when app_motion_init() is called in src/main.cpp
     - name: "Motion"
-      state_topic: "wifi6_sensor/xiaoc5_a1b2c3/motion"
+      state_topic: "apexha_sensor/xiaoc5_a1b2c3/motion"
       payload_on: "detected"
       payload_off: "clear"
       device_class: motion
-      availability_topic: "wifi6_sensor/xiaoc5_a1b2c3/availability"
+      availability_topic: "apexha_sensor/xiaoc5_a1b2c3/availability"
       expire_after: 64800
   sensor:
-    - name: "Window sensor WiFi signal"
-      state_topic: "wifi6_sensor/xiaoc5_a1b2c3/rssi"
+    - name: "ApexHA C1 WiFi signal"
+      state_topic: "apexha_sensor/xiaoc5_a1b2c3/rssi"
       unit_of_measurement: "dBm"
       device_class: signal_strength
       state_class: measurement
       entity_category: diagnostic
-      availability_topic: "wifi6_sensor/xiaoc5_a1b2c3/availability"
+      availability_topic: "apexha_sensor/xiaoc5_a1b2c3/availability"
       expire_after: 64800
-    - name: "Window sensor WiFi network"
-      state_topic: "wifi6_sensor/xiaoc5_a1b2c3/ssid"
+    - name: "ApexHA C1 WiFi network"
+      state_topic: "apexha_sensor/xiaoc5_a1b2c3/ssid"
       icon: mdi:wifi
       entity_category: diagnostic
-      availability_topic: "wifi6_sensor/xiaoc5_a1b2c3/availability"
+      availability_topic: "apexha_sensor/xiaoc5_a1b2c3/availability"
       expire_after: 64800
-    - name: "Window sensor IP address"
-      state_topic: "wifi6_sensor/xiaoc5_a1b2c3/ip"
+    - name: "ApexHA C1 IP address"
+      state_topic: "apexha_sensor/xiaoc5_a1b2c3/ip"
       icon: mdi:ip-network
       entity_category: diagnostic
-      availability_topic: "wifi6_sensor/xiaoc5_a1b2c3/availability"
+      availability_topic: "apexha_sensor/xiaoc5_a1b2c3/availability"
       expire_after: 64800
-    - name: "Window sensor MAC address"
-      state_topic: "wifi6_sensor/xiaoc5_a1b2c3/mac"
+    - name: "ApexHA C1 MAC address"
+      state_topic: "apexha_sensor/xiaoc5_a1b2c3/mac"
       icon: mdi:identifier
       entity_category: diagnostic
-      availability_topic: "wifi6_sensor/xiaoc5_a1b2c3/availability"
+      availability_topic: "apexha_sensor/xiaoc5_a1b2c3/availability"
       expire_after: 64800
-    - name: "Window sensor firmware version"
-      state_topic: "wifi6_sensor/xiaoc5_a1b2c3/version"
+    - name: "ApexHA C1 firmware version"
+      state_topic: "apexha_sensor/xiaoc5_a1b2c3/version"
       icon: mdi:chip
       entity_category: diagnostic
-      availability_topic: "wifi6_sensor/xiaoc5_a1b2c3/availability"
+      availability_topic: "apexha_sensor/xiaoc5_a1b2c3/availability"
       expire_after: 64800
-    - name: "Window sensor battery voltage"
-      state_topic: "wifi6_sensor/xiaoc5_a1b2c3/battery_voltage"
+    - name: "ApexHA C1 battery voltage"
+      state_topic: "apexha_sensor/xiaoc5_a1b2c3/battery_voltage"
       unit_of_measurement: "V"
       device_class: voltage
       state_class: measurement
       entity_category: diagnostic
-      availability_topic: "wifi6_sensor/xiaoc5_a1b2c3/availability"
+      availability_topic: "apexha_sensor/xiaoc5_a1b2c3/availability"
       expire_after: 64800
-    - name: "Window sensor battery"
-      state_topic: "wifi6_sensor/xiaoc5_a1b2c3/battery"
+    - name: "ApexHA C1 battery"
+      state_topic: "apexha_sensor/xiaoc5_a1b2c3/battery"
       unit_of_measurement: "%"
       device_class: battery
       state_class: measurement
       entity_category: diagnostic
-      availability_topic: "wifi6_sensor/xiaoc5_a1b2c3/availability"
+      availability_topic: "apexha_sensor/xiaoc5_a1b2c3/availability"
       expire_after: 64800
 ```
 
 ## Testing from a PC
 
 ```sh
-mosquitto_sub -h <broker> -u <user> -P <pass> -v -t 'wifi6_sensor/#' -t 'homeassistant/+/xiaoc5_+/+/config'
+mosquitto_sub -h <broker> -u <user> -P <pass> -v -t 'apexha_sensor/#' -t 'homeassistant/+/xiaoc5_+/+/config'
 ```

@@ -206,7 +206,7 @@ There is no custom status code. Functions return `bool` (true = success). `NetSt
 | `void net_set_discovery_handler(NetDiscoveryHandler handler)` | Called on MQTT connect after the device diagnostics discovery, until discovery succeeded once per power cycle. |
 | `bool net_publish_diagnostics()` | Publishes rssi, ssid, ip, mac, version, battery, and attributes. |
 | `void net_get_status(NetStatus *status)` | Snapshot for the debug API. |
-| `const char *net_base_topic()` | `wifi6_sensor/<device_id>`. |
+| `const char *net_base_topic()` | `apexha_sensor/<device_id>`. |
 
 #### Debug API (debug_api.h)
 | Function | Description |
@@ -231,7 +231,7 @@ Example output:
 [     2.980] MQTT connected
 [     5.000] STATUS wifi=connected rssi=-61 ch=6 ip=192.168.1.50 | mqtt=connected(state=0) | inputs: reed=closed(raw=0) | sleep=light wake=reset boot=1 sleeps=0 stay_awake=0 heap=231000
 [     7.412] INPUT reed -> open
-[     7.415] MQTT wifi6_sensor/xiaoc5_a1b2c3/window = open ok
+[     7.415] MQTT apexha_sensor/xiaoc5_a1b2c3/window = open ok
 ```
 
 
@@ -341,6 +341,7 @@ The manual light sleep is used because `CONFIG_PM_ENABLE` (automatic light sleep
 - `CFG_REED_ENABLED` / `CFG_IR_ENABLED` were removed: select the applications in [src/main.cpp](src/main.cpp). An entity of an application that is no longer initialized is not removed automatically (see [docs/mqtt_topics.md](docs/mqtt_topics.md)).
 - The new `ssid`, `ip`, `mac`, and `version` diagnostic entities are announced only after a power cycle, because discovery is sent once per power cycle.
 - Firmware versioning restarts at `0.1` ([include/fw_version.h](include/fw_version.h)); the previous `CFG_FW_VERSION "1.0.0"` was removed.
+- Firmware 0.2 renames the MQTT base topic from `wifi6_sensor` to `apexha_sensor`. Home Assistant entities keep their `unique_id` and follow the new topics after the discovery update; old retained `wifi6_sensor/...` messages must be cleared on the broker by hand.
 
 ## Limitations
 - D2 (GPIO25) cannot wake the chip from deep sleep; in `SLEEP_MODE_DEEP` motion is reported only while awake.
