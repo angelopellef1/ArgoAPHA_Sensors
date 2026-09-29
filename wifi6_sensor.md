@@ -50,14 +50,38 @@ Implement sleep mode and wake up on one of this input change
 #### Files
 | File | Content |
 |---|---|
-| [include/wifi6_sensor_config.h](include/wifi6_sensor_config.h) | All setting defines (input enable, pins, debounce, sleep mode, WiFi, MQTT, debug) |
+| [include/wifi6_sensor_config.h](include/wifi6_sensor_config.h) | All setting defines (application pins, debounce, sleep mode, WiFi, MQTT, debug) |
 | [include/secrets.example.h](include/secrets.example.h) | Template for WiFi and MQTT credentials; copy to `include/secrets.h` (git-ignored) |
-| [src/main.cpp](src/main.cpp) | Orchestrator: setup, main loop, publish scheduling, sleep decision |
-| [src/sensor_inputs.cpp](src/sensor_inputs.cpp) | Pin setup and debouncing, input change event queue |
-| [src/sensor_net.cpp](src/sensor_net.cpp) | WiFi (long-range settings), MQTT, Home Assistant discovery |
+| [src/main.cpp](src/main.cpp) | Selects the applications: `runtime_init()`, `app_window_init()`, `runtime_start()`, then `runtime_loop()` |
+| [src/app_window.cpp](src/app_window.cpp) | Window contact application: reed input on D1 -> `window` binary_sensor (`open`/`closed`) |
+| [src/app_motion.cpp](src/app_motion.cpp) | Motion application: IR/PIR input on D2 -> `motion` binary_sensor (`detected`/`clear`). Not initialized by default |
+| [src/sensor_runtime.cpp](src/sensor_runtime.cpp) | Application runtime: boot, entity registry, publish scheduling, sleep decision |
+| [src/sensor_inputs.cpp](src/sensor_inputs.cpp) | Generic debounced digital inputs registered at runtime, input change event queue |
+| [src/sensor_net.cpp](src/sensor_net.cpp) | WiFi (long-range settings), MQTT, device diagnostics topics, Home Assistant discovery |
 | [src/sensor_power.cpp](src/sensor_power.cpp) | Light / deep sleep, wake-up sources, wake reason |
 | [src/debug_api.cpp](src/debug_api.cpp) | USB serial debug log, status output, serial commands |
 | [docs/mqtt_topics.md](docs/mqtt_topics.md) | MQTT topics, payloads, Home Assistant configuration |
+
+#### Application architecture
+The firmware is split into a platform layer (inputs, power, network, battery, debug), an application runtime, and independent applications:
+- An application is a `SensorBinaryEntity` descriptor: input pin/pull/active level/debounce, MQTT payloads, MQTT leaf and Home Assistant name/device_class. It registers itself with `runtime_add_binary_sensor()`.
+- The window contact application ([src/app_window.cpp](src/app_window.cpp)) and the motion application ([src/app_motion.cpp](src/app_motion.cpp)) do not know each other. The platform modules do not know any application.
+- [src/main.cpp](src/main.cpp) chooses which applications run. By default only the window contact application is initialized:
+
+```cpp
+void setup()
+{
+    runtime_init();
+    app_window_init();
+    // app_motion_init();
+    runtime_start();
+}
+
+void loop()
+{
+    runtime_loop();
+}
+```
 
 #### Long range WiFi
 The ESP32-C5 is a dual-band (2.4 / 5 GHz) WiFi 6 chip. The station is configured for maximum link budget with a standard access point:
@@ -80,18 +104,35 @@ Power note: with the window closed, the reed pull-up draws 3.3 V / R all the tim
 
 ## Interface
 
-The public contract of each unit. Headers: [src/sensor_inputs.h](src/sensor_inputs.h), [src/sensor_power.h](src/sensor_power.h), [src/sensor_net.h](src/sensor_net.h), [src/debug_api.h](src/debug_api.h).
+The public contract of each unit. Headers: [src/app_window.h](src/app_window.h), [src/app_motion.h](src/app_motion.h), [src/sensor_runtime.h](src/sensor_runtime.h), [src/sensor_inputs.h](src/sensor_inputs.h), [src/sensor_power.h](src/sensor_power.h), [src/sensor_net.h](src/sensor_net.h), [src/debug_api.h](src/debug_api.h).
 
 ### Data Types
 
 ```cpp
-enum SensorInput : uint8_t { SENSOR_INPUT_REED = 0, SENSOR_INPUT_IR, SENSOR_INPUT_COUNT };
+constexpr uint8_t SENSOR_INPUT_MAX = 4;
+
+struct SensorInputConfig {      // static lifetime, owned by the application
+    const char *name;           // log name, e.g. "reed"
+    uint8_t pin, pull_mode, active_level;
+    uint16_t debounce_ms;
+    const char *active_name;    // e.g. "open"
+    const char *inactive_name;  // e.g. "closed"
+};
 
 struct SensorInputEvent {
-    SensorInput id;
-    bool active;            // reed: true = open, IR: true = detected
+    uint8_t id;                 // value returned by inputs_add()
+    bool active;
     uint32_t timestamp_ms;
 };
+
+struct SensorBinaryEntity {     // static lifetime, owned by the application
+    SensorInputConfig input;    // active_name / inactive_name are the MQTT payloads
+    const char *object;         // MQTT leaf and HA object id, e.g. "window"
+    const char *label;          // HA entity name
+    const char *device_class;   // HA binary_sensor device_class
+};
+
+using NetDiscoveryHandler = bool (*)();
 
 enum WakeReason : uint8_t { WAKE_RESET = 0, WAKE_INPUT, WAKE_TIMER, WAKE_OTHER };
 
@@ -110,29 +151,45 @@ There is no custom status code. Functions return `bool` (true = success). `NetSt
 
 ### Public Functions
 
+#### Applications (app_window.h, app_motion.h)
+| Function | Description |
+|---|---|
+| `bool app_window_init()` | Registers the window contact entity (reed, `CFG_REED_*`, payloads `open`/`closed`, device_class `window`). Call between `runtime_init()` and `runtime_start()`. |
+| `bool app_motion_init()` | Registers the motion entity (IR, `CFG_IR_*`, payloads `detected`/`clear`, device_class `motion`). Call between `runtime_init()` and `runtime_start()`. |
+
+#### Runtime (sensor_runtime.h)
+| Function | Description |
+|---|---|
+| `void runtime_init()` | `debug_init`, `power_init`, device id, `battery_init`, BOOT log, `net_init`, and registers the entity discovery handler. No radio activity. |
+| `bool runtime_add_binary_sensor(const SensorBinaryEntity *entity)` | Adds the entity input to the input driver and to the entity registry. False if the table is full or the runtime is already started. |
+| `void runtime_start()` | Starts input sampling, arms the boot awake window, measures the battery, and turns the radio on. |
+| `void runtime_loop()` | Main loop step, see [Main loop](#main-loop). |
+
 #### Inputs (sensor_inputs.h)
 | Function | Description |
 |---|---|
-| `void inputs_init()` | Configures the enabled pins with their pull modes, seeds the debouncer with the current level (no event at boot), and starts the 5 ms sampling timer. Call once before any other `inputs_*` function. |
-| `bool inputs_enabled(SensorInput id)` | True if the input is enabled by the config defines. |
-| `uint8_t inputs_pin(SensorInput id)` | GPIO number of the input. |
-| `int inputs_raw_level(SensorInput id)` | Raw (not debounced) pin level. |
-| `bool inputs_get_state(SensorInput id)` | Debounced logical state (reed: open, IR: detected). Safe from any task. |
+| `int inputs_add(const SensorInputConfig *config)` | Releases the RTC mux of an LP pad (after deep sleep), configures the pin with its pull mode, and seeds the debouncer with the current level (no event at boot). Returns the input id, or -1 if the table is full or sampling already started. |
+| `void inputs_start()` | Creates the event queue and starts the 5 ms sampling timer. The input table is frozen afterwards. |
+| `uint8_t inputs_count()` | Number of registered inputs; ids are `0 .. count-1`. |
+| `uint8_t inputs_pin(uint8_t id)` / `inputs_pull_mode(uint8_t id)` | GPIO number / pull mode of the input. |
+| `int inputs_raw_level(uint8_t id)` | Raw (not debounced) pin level. |
+| `bool inputs_get_state(uint8_t id)` | Debounced logical state (true = active). Safe from any task. |
 | `bool inputs_poll_event(SensorInputEvent *event)` | Non-blocking pop of the next debounced change. Returns false if the queue is empty. |
-| `bool inputs_is_settled()` | True when no event is queued and each enabled input is fully debounced with raw == stable. Used before sleep. |
-| `const char *inputs_name(SensorInput id)` | `"reed"` / `"ir"`. |
-| `const char *inputs_state_name(SensorInput id, bool active)` | MQTT payload string: `open`/`closed`, `detected`/`clear`. |
+| `bool inputs_is_settled()` | True when no event is queued and each input is fully debounced with raw == stable. Used before sleep. |
+| `const char *inputs_name(uint8_t id)` | Log name from the config (`"reed"`, `"ir"`). |
+| `const char *inputs_state_name(uint8_t id, bool active)` | `active_name` / `inactive_name` from the config. |
 
 #### Power (sensor_power.h)
 | Function | Description |
 |---|---|
-| `void power_init()` | Reads the wake-up cause, increments the boot counter (kept in RTC memory), and releases the RTC mux of D1 after deep sleep. Call before `inputs_init()`. |
+| `void power_init()` | Reads the wake-up cause and increments the boot counter (kept in RTC memory). |
 | `WakeReason power_last_wake_reason()` | Reason for the last start or light-sleep wake-up. |
 | `const char *power_wake_reason_name(WakeReason)` | `reset` / `input` / `timer` / `other`. |
 | `const char *power_sleep_mode_name()` | `none` / `light` / `deep`. |
 | `uint32_t power_boot_count()` / `power_sleep_count()` | Counters (reset on power-on). |
-| `WakeReason power_light_sleep(uint32_t timer_s)` | Arms a level wake-up on every enabled input (opposite of current level = wake on change) plus a timer, enters light sleep, and returns the wake reason. The caller must turn the radio off first. |
-| `[[noreturn]] void power_deep_sleep(uint32_t timer_s)` | Arms EXT1 on D1 (opposite of current level) plus a timer, keeps the pad pull active, and enters deep sleep. The device restarts through `setup()`. |
+| `bool power_can_wake_from_deep_sleep(uint8_t pin)` | True for LP (RTC) GPIOs (GPIO0-6 on the ESP32-C5). |
+| `WakeReason power_light_sleep(uint32_t timer_s)` | Arms a level wake-up on every registered input (opposite of current level = wake on change) plus a timer, enters light sleep, and returns the wake reason. The caller must turn the radio off first. |
+| `[[noreturn]] void power_deep_sleep(uint32_t timer_s)` | Arms EXT1 on every registered LP GPIO input (per-pin opposite of current level), keeps the pad pulls active, adds a timer, and enters deep sleep. The device restarts through `setup()`. |
 
 #### Network (sensor_net.h)
 | Function | Description |
@@ -143,8 +200,10 @@ There is no custom status code. Functions return `bool` (true = success). `NetSt
 | `void net_loop()` | Drives the WiFi retry and MQTT connect/backoff state machine. Call every loop. MQTT connect blocks for up to about 5 s. |
 | `bool net_mqtt_connected()` | MQTT session is up. |
 | `bool net_mqtt_just_connected()` | True once after each new MQTT session (read clears it). |
-| `bool net_publish_input(SensorInput id, bool active)` | Publishes one input state (retained). |
-| `bool net_publish_all()` | Publishes rssi, attributes, and all enabled input states. |
+| `bool net_publish_state(const char *leaf, const char *payload)` | Publishes `<base>/<leaf>` (retained). |
+| `bool net_publish_binary_discovery(object, label, device_class, payload_on, payload_off)` | Publishes a retained Home Assistant binary_sensor config for `<base>/<object>`. |
+| `void net_set_discovery_handler(NetDiscoveryHandler handler)` | Called on MQTT connect after the device diagnostics discovery, until discovery succeeded once per power cycle. |
+| `bool net_publish_diagnostics()` | Publishes rssi, ssid, ip, mac, battery, and attributes. |
 | `void net_get_status(NetStatus *status)` | Snapshot for the debug API. |
 | `const char *net_base_topic()` | `wifi6_sensor/<device_id>`. |
 
@@ -164,11 +223,12 @@ Serial commands: `s` status, `p` toggle periodic status, `w` toggle stay awake, 
 Example output:
 ```
 [     1.204] BOOT WiFi6 Window Sensor fw=1.0.0 id=xiaoc5_a1b2c3 wake=reset boot=1 sleep=light
+[     1.210] APP window: input 'reed' on GPIO0
 [     1.230] WIFI connecting to 'myssid'
-[     2.911] WIFI connected ip=192.168.1.50 rssi=-61 ch=6 (1681 ms)
+[     2.911] WIFI connected ssid='myssid' ip=192.168.1.50 rssi=-61 ch=6 (1681 ms)
 [     2.915] MQTT connecting to 192.168.1.10:1883
 [     2.980] MQTT connected
-[     5.000] STATUS wifi=connected rssi=-61 ch=6 ip=192.168.1.50 | mqtt=connected(state=0) | inputs: reed=closed(raw=0) ir=clear(raw=0) | sleep=light wake=reset boot=1 sleeps=0 stay_awake=0 heap=231000
+[     5.000] STATUS wifi=connected rssi=-61 ch=6 ip=192.168.1.50 | mqtt=connected(state=0) | inputs: reed=closed(raw=0) | sleep=light wake=reset boot=1 sleeps=0 stay_awake=0 heap=231000
 [     7.412] INPUT reed -> open
 [     7.415] MQTT wifi6_sensor/xiaoc5_a1b2c3/window = open ok
 ```
@@ -180,12 +240,16 @@ Example output:
 
 ```cpp
 // sensor_inputs.cpp
-struct InputConfig  { bool enabled; uint8_t pin, pull_mode, active_level; uint16_t debounce_ms;
-                      const char *name, *active_name, *inactive_name; };   // const table from config defines
+const SensorInputConfig *s_config[SENSOR_INPUT_MAX];   // registered by the applications, indexed by input id
 struct InputRuntime { uint8_t integrator, integrator_max; volatile bool active; };
 
-// main.cpp
-bool     g_publish_all;          // publish every state + attributes (after connect / wake / heartbeat)
+// sensor_net.cpp
+struct DiagnosticSensor { const char *object, *name, *unit, *dev_class, *icon; bool enabled; };
+// kDiagnostics: rssi, ssid, ip, mac, battery_voltage, battery
+
+// sensor_runtime.cpp
+const SensorBinaryEntity *g_entities[SENSOR_INPUT_MAX]; // indexed by input id
+bool     g_publish_all;          // publish every state + diagnostics (after connect / wake / heartbeat)
 uint32_t g_pending_mask;         // bit per input: change not yet published
 uint32_t g_latched_active_mask;  // bit per input: went active since the last publish
 ```
@@ -201,18 +265,23 @@ RTC memory (survives deep sleep): `s_boot_count`, `s_sleep_count`, `s_discovery_
 | `map_cause(cause)` | sensor_power.cpp | `esp_sleep_wakeup_cause_t` to `WakeReason`. |
 | `apply_radio_config()` | sensor_net.cpp | Band mode, protocols, bandwidth, and TX power (reapplied on every `net_start`). |
 | `mqtt_try_connect(now)` | sensor_net.cpp | Connect with LWT, publish `online`, send discovery once, exponential backoff on failure. |
-| `publish_discovery()` / `publish_binary_discovery()` / `publish_rssi_discovery()` | sensor_net.cpp | Retained Home Assistant discovery configs. |
+| `publish_discovery()` / `publish_sensor_discovery()` | sensor_net.cpp | Retained Home Assistant configs of the diagnostic sensors (measurement or text sensor), then the application discovery handler. |
 | `publish_attributes()` | sensor_net.cpp | JSON diagnostics. |
-| `build_device_id()` | main.cpp | `CFG_DEVICE_ID` or `xiaoc5_<MAC[3..5]>`. |
-| `handle_input_events()` | main.cpp | Drains the event queue, sets the pending and latched masks, and logs. |
-| `publish_pending()` | main.cpp | Publishes pending changes (active then inactive for latched short pulses), then the full state if requested. |
-| `maybe_sleep()` | main.cpp | Sleep decision and sleep/wake sequence. |
+| `build_device_id()` | sensor_runtime.cpp | `CFG_DEVICE_ID` or `xiaoc5_<MAC[3..5]>`. |
+| `publish_entity_discovery()` | sensor_runtime.cpp | Discovery handler: binary_sensor config of every registered entity. |
+| `publish_input(id, active)` / `publish_all()` | sensor_runtime.cpp | One entity state / diagnostics plus every entity state. |
+| `handle_input_events()` | sensor_runtime.cpp | Drains the event queue, sets the pending and latched masks, and logs. |
+| `publish_pending()` | sensor_runtime.cpp | Publishes pending changes (active then inactive for latched short pulses), then the full state if requested. |
+| `maybe_sleep()` | sensor_runtime.cpp | Sleep decision and sleep/wake sequence. |
 
 ### Boot sequence
-- `debug_init` -> `power_init` (wake cause, RTC counters, D1 RTC mux release) -> `build_device_id` -> `inputs_init` -> `net_init` -> `net_start`.
+- `runtime_init`: `debug_init` -> `power_init` (wake cause, RTC counters) -> `build_device_id` -> `battery_init` -> `net_init` -> discovery handler.
+- `app_window_init` (and any other application): `inputs_add` (LP pad RTC mux release, pin mode, debouncer seed).
+- `runtime_start`: `inputs_start` (queue and sampling timer) -> battery measurement -> `net_start`.
 - After a reset/power-on (not a deep-sleep wake), the device stays awake for `CFG_AWAKE_AFTER_BOOT_MS` (60 s) so USB flashing and debugging are possible.
 
 ### Main loop
+`runtime_loop()`:
 1. `debug_loop()`: serial commands and periodic status.
 2. `handle_input_events()`: debounced changes become pending bits.
 3. `net_loop()`: WiFi/MQTT state machine.
@@ -231,8 +300,8 @@ Sleep is entered when all of these hold: stay-awake is off, the boot window has 
 | Mode | Radio | Wake sources | After wake |
 |---|---|---|---|
 | `SLEEP_MODE_NONE` | on, WiFi modem sleep | - | - |
-| `SLEEP_MODE_LIGHT` | off | GPIO level on D1 **and** D2 (opposite of current level), timer `CFG_HEARTBEAT_S` | RAM kept. Debouncer detects the change, radio on, reconnect, full publish. |
-| `SLEEP_MODE_DEEP` (default) | off | EXT1 on D1 only (GPIO0 is LP-capable, GPIO25 is not), timer | Reboot through `setup()`. Current states are published after connecting. |
+| `SLEEP_MODE_LIGHT` | off | GPIO level on every registered input (D1 and/or D2, opposite of current level), timer `CFG_HEARTBEAT_S` | RAM kept. Debouncer detects the change, radio on, reconnect, full publish. |
+| `SLEEP_MODE_DEEP` (default) | off | EXT1 on registered LP GPIO inputs only (D1/GPIO0 yes, D2/GPIO25 no), timer | Reboot through `setup()`. Current states are published after connecting. |
 
 The manual light sleep is used because `CONFIG_PM_ENABLE` (automatic light sleep with the WiFi connection kept) is disabled in the prebuilt Arduino-ESP32 libraries.
 
@@ -257,10 +326,13 @@ The manual light sleep is used because `CONFIG_PM_ENABLE` (automatic light sleep
 - Radio configuration call failure -> logged, continue with driver defaults.
 - Cannot publish within `CFG_MAX_AWAKE_MS` -> sleep anyway; all states are published at the next wake.
 - Event queue full (16) -> event dropped, the current state is still published at the next full publish (wake/heartbeat).
-- Compile-time: no input enabled -> `#error`; deep sleep without reed -> `#error`; deep sleep with IR enabled -> `#warning`.
+- More than `SENSOR_INPUT_MAX` entities, or an application initialized after `runtime_start()` -> `runtime_add_binary_sensor` returns false and logs `APP ... cannot add input`.
+- Deep sleep with an input that is not an LP GPIO -> logged at registration (`cannot wake from deep sleep`); the input is reported only while awake. With no application initialized, only diagnostics are published and the device wakes on the timer only.
 
 ## Migration and Upgrade Scenarios
 - No persistent data (only RTC counters). Changing `CFG_DEVICE_ID` or `CFG_MQTT_BASE_TOPIC` creates new Home Assistant entities; remove the old retained topics on the broker.
+- `CFG_REED_ENABLED` / `CFG_IR_ENABLED` were removed: select the applications in [src/main.cpp](src/main.cpp). An entity of an application that is no longer initialized is not removed automatically (see [docs/mqtt_topics.md](docs/mqtt_topics.md)).
+- The new `ssid`, `ip`, and `mac` diagnostic entities are announced only after a power cycle, because discovery is sent once per power cycle.
 
 ## Limitations
 - D2 (GPIO25) cannot wake the chip from deep sleep; in `SLEEP_MODE_DEEP` motion is reported only while awake.
@@ -275,12 +347,18 @@ The manual light sleep is used because `CONFIG_PM_ENABLE` (automatic light sleep
 
 ```mermaid
 flowchart TD
-    main[main.cpp orchestrator] --> inputs[sensor_inputs]
-    main --> net[sensor_net]
-    main --> power[sensor_power]
-    main --> dbg[debug_api]
-    net --> inputs
+    main[main.cpp] --> win[app_window]
+    main -. optional .-> mot[app_motion]
+    main --> rt[sensor_runtime]
+    win --> rt
+    mot --> rt
+    rt --> inputs[sensor_inputs]
+    rt --> net[sensor_net]
+    rt --> power[sensor_power]
+    rt --> bat[sensor_battery]
+    rt --> dbg[debug_api]
     net --> power
+    net --> bat
     net --> dbg
     power --> inputs
     dbg --> inputs
@@ -288,4 +366,6 @@ flowchart TD
     dbg --> power
     net --> broker[(MQTT broker / Home Assistant)]
 ```
+
+The applications depend only on `sensor_runtime` and the config header. The platform modules (`sensor_inputs`, `sensor_net`, `sensor_power`, `sensor_battery`, `debug_api`) do not include any application header.
 

@@ -54,12 +54,7 @@ void debug_print_status()
 
     char inputs[96] = "";
     size_t len = 0;
-    for (uint8_t i = 0; i < SENSOR_INPUT_COUNT; i++) {
-        const SensorInput id = static_cast<SensorInput>(i);
-        if (!inputs_enabled(id)) {
-            len += snprintf(inputs + len, sizeof(inputs) - len, " %s=disabled", inputs_name(id));
-            continue;
-        }
+    for (uint8_t id = 0; id < inputs_count(); id++) {
         len += snprintf(inputs + len, sizeof(inputs) - len, " %s=%s(raw=%d)", inputs_name(id),
                         inputs_state_name(id, inputs_get_state(id)), inputs_raw_level(id));
     }

@@ -2,24 +2,33 @@
 
 #include <stdint.h>
 
-enum SensorInput : uint8_t {
-    SENSOR_INPUT_REED = 0,
-    SENSOR_INPUT_IR,
-    SENSOR_INPUT_COUNT
+constexpr uint8_t SENSOR_INPUT_MAX = 4;
+
+// Provided by the application; must have static lifetime.
+struct SensorInputConfig {
+    const char *name;           // log name, e.g. "reed"
+    uint8_t pin;
+    uint8_t pull_mode;          // INPUT / INPUT_PULLUP / INPUT_PULLDOWN
+    uint8_t active_level;       // pin level of the active state
+    uint16_t debounce_ms;
+    const char *active_name;    // e.g. "open"
+    const char *inactive_name;  // e.g. "closed"
 };
 
 struct SensorInputEvent {
-    SensorInput id;
-    bool active;            // reed: true = open, IR: true = detected
+    uint8_t id;
+    bool active;
     uint32_t timestamp_ms;
 };
 
-void inputs_init();
-bool inputs_enabled(SensorInput id);
-uint8_t inputs_pin(SensorInput id);
-int inputs_raw_level(SensorInput id);
-bool inputs_get_state(SensorInput id);
+int inputs_add(const SensorInputConfig *config);
+void inputs_start();
+uint8_t inputs_count();
+uint8_t inputs_pin(uint8_t id);
+uint8_t inputs_pull_mode(uint8_t id);
+int inputs_raw_level(uint8_t id);
+bool inputs_get_state(uint8_t id);
 bool inputs_poll_event(SensorInputEvent *event);
 bool inputs_is_settled();
-const char *inputs_name(SensorInput id);
-const char *inputs_state_name(SensorInput id, bool active);
+const char *inputs_name(uint8_t id);
+const char *inputs_state_name(uint8_t id, bool active);
