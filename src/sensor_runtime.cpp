@@ -14,12 +14,22 @@ namespace {
 char g_device_id[32];
 const SensorBinaryEntity *g_entities[SENSOR_INPUT_MAX];  // indexed by input id
 bool g_publish_all = true;
+bool g_publish_diag = false;        // diagnostics owed after a state change
+bool g_hold_after_full = false;     // woken by an input: hold awake once the states are published
 uint32_t g_pending_mask = 0;        // inputs whose change is not yet published
 uint32_t g_latched_active_mask = 0; // inputs that went active since the last publish
 uint32_t g_awake_since_ms = 0;
 uint32_t g_last_event_ms = 0;
 uint32_t g_last_full_publish_ms = 0;
-uint32_t g_boot_awake_until_ms = 0;
+uint32_t g_awake_until_ms = 0;
+
+void hold_awake(uint32_t duration_ms)
+{
+    const uint32_t until = millis() + duration_ms;
+    if (static_cast<int32_t>(until - g_awake_until_ms) > 0) {
+        g_awake_until_ms = until;
+    }
+}
 
 void build_device_id()
 {
@@ -61,11 +71,11 @@ bool publish_input(uint8_t id, bool active)
 
 bool publish_all()
 {
-    bool ok = net_publish_diagnostics();
+    bool ok = true;
     for (uint8_t id = 0; id < inputs_count(); id++) {
         ok = publish_input(id, inputs_get_state(id)) && ok;
     }
-    return ok;
+    return net_publish_diagnostics() && ok;
 }
 
 void handle_input_events()
@@ -105,6 +115,8 @@ void publish_pending()
         }
         g_pending_mask &= ~bit;
         g_latched_active_mask &= ~bit;
+        g_publish_diag = true;
+        hold_awake(CFG_AWAKE_AFTER_STATE_MS);
     }
 
     const uint32_t now = millis();
@@ -114,9 +126,18 @@ void publish_pending()
         g_publish_all = true;
     }
 #endif
-    if (g_publish_all && publish_all()) {
-        g_publish_all = false;
-        g_last_full_publish_ms = now;
+    if (g_publish_all) {
+        if (publish_all()) {
+            g_publish_all = false;
+            g_publish_diag = false;
+            g_last_full_publish_ms = now;
+            if (g_hold_after_full) {
+                g_hold_after_full = false;
+                hold_awake(CFG_AWAKE_AFTER_STATE_MS);
+            }
+        }
+    } else if (g_publish_diag && net_publish_diagnostics()) {
+        g_publish_diag = false;
     }
 }
 
@@ -124,13 +145,13 @@ void maybe_sleep()
 {
 #if CFG_SLEEP_MODE != SLEEP_MODE_NONE
     const uint32_t now = millis();
-    if (debug_stay_awake() || static_cast<int32_t>(now - g_boot_awake_until_ms) < 0) {
+    if (debug_stay_awake() || static_cast<int32_t>(now - g_awake_until_ms) < 0) {
         return;
     }
     if (now - g_last_event_ms < CFG_AWAKE_AFTER_EVENT_MS) {
         return;
     }
-    const bool work_done = !g_publish_all && g_pending_mask == 0;
+    const bool work_done = !g_publish_all && !g_publish_diag && g_pending_mask == 0;
     const bool timed_out = now - g_awake_since_ms >= CFG_MAX_AWAKE_MS;
     if (!(work_done && inputs_is_settled()) && !timed_out) {
         return;
@@ -143,7 +164,9 @@ void maybe_sleep()
 #if CFG_SLEEP_MODE == SLEEP_MODE_LIGHT
     const WakeReason reason = power_light_sleep(CFG_HEARTBEAT_S);
     g_awake_since_ms = millis();
+    g_awake_until_ms = g_awake_since_ms;
     g_publish_all = true;
+    g_hold_after_full = reason == WAKE_INPUT;
     debug_log("WAKE reason=%s", power_wake_reason_name(reason));
     measure_battery();
     net_start();
@@ -162,7 +185,7 @@ void runtime_init()
     build_device_id();
     battery_init();
 
-    debug_log("BOOT %s fw=%s id=%s wake=%s boot=%lu sleep=%s", CFG_DEVICE_NAME, CFG_FW_VERSION, g_device_id,
+    debug_log("BOOT %s fw=%s id=%s wake=%s boot=%lu sleep=%s", CFG_DEVICE_NAME, FW_VERSION, g_device_id,
               power_wake_reason_name(power_last_wake_reason()), static_cast<unsigned long>(power_boot_count()),
               power_sleep_mode_name());
 
@@ -193,9 +216,11 @@ void runtime_start()
 
     g_awake_since_ms = millis();
     g_last_event_ms = g_awake_since_ms;
+    g_awake_until_ms = g_awake_since_ms;
     if (power_last_wake_reason() == WAKE_RESET) {
-        g_boot_awake_until_ms = g_awake_since_ms + CFG_AWAKE_AFTER_BOOT_MS;
+        hold_awake(CFG_AWAKE_AFTER_BOOT_MS);
     }
+    g_hold_after_full = power_last_wake_reason() == WAKE_INPUT;
 
     // Measure before the radio starts: no TX current sag on the battery.
     measure_battery();

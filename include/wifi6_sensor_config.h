@@ -2,10 +2,11 @@
 
 #include <Arduino.h>
 
+#include "fw_version.h"
+
 // ---------------------------------------------------------------------------
-// Firmware identity
+// Firmware identity (version: include/fw_version.h)
 // ---------------------------------------------------------------------------
-#define CFG_FW_VERSION              "1.0.0"
 #define CFG_DEVICE_NAME             "WiFi6 Window Sensor"
 // Empty string -> auto "xiaoc5_<last 3 MAC bytes>"
 #define CFG_DEVICE_ID               ""
@@ -39,6 +40,7 @@
 #endif
 #define CFG_AWAKE_AFTER_BOOT_MS     60000   // stay awake after reset so USB flashing/debug is possible
 #define CFG_AWAKE_AFTER_EVENT_MS    2000    // minimum awake time after the last input change
+#define CFG_AWAKE_AFTER_STATE_MS    20000   // stay connected after a published state change for fast follow-up changes
 #define CFG_MAX_AWAKE_MS            30000   // give up publishing and sleep anyway after this time
 #define CFG_HEARTBEAT_S             21600   // 6 h periodic state republish / timer wake-up
 

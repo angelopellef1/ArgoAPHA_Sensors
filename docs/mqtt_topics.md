@@ -11,17 +11,24 @@ All state messages are **retained**, so Home Assistant sees the last state right
 | `wifi6_sensor/<id>/availability` | `online` / `offline` | yes | `online` on every MQTT connect; `offline` is the Last Will (unclean disconnect only) |
 | `wifi6_sensor/<id>/window` | `open` / `closed` | yes | reed change (debounced), every wake-up, every heartbeat |
 | `wifi6_sensor/<id>/motion` | `detected` / `clear` | yes | IR change (debounced), every wake-up, every heartbeat |
-| `wifi6_sensor/<id>/rssi` | integer dBm, e.g. `-63` | yes | every wake-up / heartbeat |
-| `wifi6_sensor/<id>/ssid` | WiFi network name, e.g. `MyHomeWiFi` | yes | every wake-up / heartbeat |
-| `wifi6_sensor/<id>/ip` | IPv4 address, e.g. `192.168.1.50` | yes | every wake-up / heartbeat |
-| `wifi6_sensor/<id>/mac` | WiFi station MAC, e.g. `AA:BB:CC:A1:B2:C3` | yes | every wake-up / heartbeat |
-| `wifi6_sensor/<id>/battery_voltage` | volts, 3 decimals, e.g. `3.912` | yes | every wake-up / heartbeat |
-| `wifi6_sensor/<id>/battery` | integer %, `0`-`100` | yes | every wake-up / heartbeat |
-| `wifi6_sensor/<id>/attributes` | JSON, see below | yes | every wake-up / heartbeat |
+| `wifi6_sensor/<id>/rssi` | integer dBm, e.g. `-63` | yes | every wake-up / heartbeat / state change |
+| `wifi6_sensor/<id>/ssid` | WiFi network name, e.g. `MyHomeWiFi` | yes | every wake-up / heartbeat / state change |
+| `wifi6_sensor/<id>/ip` | IPv4 address, e.g. `192.168.1.50` | yes | every wake-up / heartbeat / state change |
+| `wifi6_sensor/<id>/mac` | WiFi station MAC, e.g. `AA:BB:CC:A1:B2:C3` | yes | every wake-up / heartbeat / state change |
+| `wifi6_sensor/<id>/version` | firmware version, e.g. `0.1` | yes | every wake-up / heartbeat / state change |
+| `wifi6_sensor/<id>/battery_voltage` | volts, 3 decimals, e.g. `3.912` | yes | every wake-up / heartbeat / state change |
+| `wifi6_sensor/<id>/battery` | integer %, `0`-`100` | yes | every wake-up / heartbeat / state change |
+| `wifi6_sensor/<id>/attributes` | JSON, see below | yes | every wake-up / heartbeat / state change |
 
 Only the applications initialized in [src/main.cpp](../src/main.cpp) publish their state: `app_window_init()` publishes `window`, `app_motion_init()` publishes `motion`. The battery topics are omitted when `CFG_BATTERY_ENABLED = 0`.
 
-The battery is measured through the on-board divider (GPIO6, enabled by GPIO26) once per wake-up, before Wi-Fi starts. The percentage is linear between `CFG_BAT_EMPTY_MV` (3.3 V = 0 %) and `CFG_BAT_FULL_MV` (4.2 V = 100 %). With USB and no battery attached, the reading shows the charger output and is not meaningful.
+Publish order: the contact/motion state is always sent first, then all diagnostic topics (rssi, ssid, ip, mac, version, battery, attributes). This also happens after every state change while the sensor is awake.
+
+After a published state change (or a wake-up caused by an input), the sensor stays connected for `CFG_AWAKE_AFTER_STATE_MS` (20 s). A further change within this window is published immediately, without a new wake-up and WiFi/MQTT reconnect. Each change restarts the window.
+
+The firmware version is defined in [include/fw_version.h](../include/fw_version.h) and is also shown as the device software version in Home Assistant.
+
+The battery is measured through the on-board divider (GPIO6, enabled by GPIO26) once per wake-up, before Wi-Fi starts. A state change while awake republishes that measurement. The percentage is linear between `CFG_BAT_EMPTY_MV` (3.3 V = 0 %) and `CFG_BAT_FULL_MV` (4.2 V = 100 %). With USB and no battery attached, the reading shows the charger output and is not meaningful.
 
 A short motion pulse that starts and ends before MQTT reconnects is still sent as `detected` followed by `clear`.
 
@@ -38,7 +45,7 @@ A short motion pulse that starts and ends before MQTT reconnects is still sent a
   "boot": 3,
   "sleeps": 42,
   "sleep_mode": "light",
-  "fw": "1.0.0"
+  "fw": "0.1"
 }
 ```
 
@@ -56,6 +63,7 @@ With `CFG_HA_DISCOVERY = 1`, retained discovery configs are published once per p
 | `homeassistant/sensor/<id>/ssid/config` | WiFi network (diagnostic) | - |
 | `homeassistant/sensor/<id>/ip/config` | IP address (diagnostic) | - |
 | `homeassistant/sensor/<id>/mac/config` | MAC address (diagnostic) | - |
+| `homeassistant/sensor/<id>/version/config` | Firmware version (diagnostic) | - |
 | `homeassistant/sensor/<id>/battery_voltage/config` | Battery voltage (diagnostic) | `voltage` |
 | `homeassistant/sensor/<id>/battery/config` | Battery (diagnostic) | `battery` |
 
@@ -108,6 +116,12 @@ mqtt:
     - name: "Window sensor MAC address"
       state_topic: "wifi6_sensor/xiaoc5_a1b2c3/mac"
       icon: mdi:identifier
+      entity_category: diagnostic
+      availability_topic: "wifi6_sensor/xiaoc5_a1b2c3/availability"
+      expire_after: 64800
+    - name: "Window sensor firmware version"
+      state_topic: "wifi6_sensor/xiaoc5_a1b2c3/version"
+      icon: mdi:chip
       entity_category: diagnostic
       availability_topic: "wifi6_sensor/xiaoc5_a1b2c3/availability"
       expire_after: 64800

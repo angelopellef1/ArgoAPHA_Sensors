@@ -51,6 +51,7 @@ Implement sleep mode and wake up on one of this input change
 | File | Content |
 |---|---|
 | [include/wifi6_sensor_config.h](include/wifi6_sensor_config.h) | All setting defines (application pins, debounce, sleep mode, WiFi, MQTT, debug) |
+| [include/fw_version.h](include/fw_version.h) | Firmware version `FW_VERSION` (MAJOR.MINOR, starts at `0.1`) and version history |
 | [include/secrets.example.h](include/secrets.example.h) | Template for WiFi and MQTT credentials; copy to `include/secrets.h` (git-ignored) |
 | [src/main.cpp](src/main.cpp) | Selects the applications: `runtime_init()`, `app_window_init()`, `runtime_start()`, then `runtime_loop()` |
 | [src/app_window.cpp](src/app_window.cpp) | Window contact application: reed input on D1 -> `window` binary_sensor (`open`/`closed`) |
@@ -203,7 +204,7 @@ There is no custom status code. Functions return `bool` (true = success). `NetSt
 | `bool net_publish_state(const char *leaf, const char *payload)` | Publishes `<base>/<leaf>` (retained). |
 | `bool net_publish_binary_discovery(object, label, device_class, payload_on, payload_off)` | Publishes a retained Home Assistant binary_sensor config for `<base>/<object>`. |
 | `void net_set_discovery_handler(NetDiscoveryHandler handler)` | Called on MQTT connect after the device diagnostics discovery, until discovery succeeded once per power cycle. |
-| `bool net_publish_diagnostics()` | Publishes rssi, ssid, ip, mac, battery, and attributes. |
+| `bool net_publish_diagnostics()` | Publishes rssi, ssid, ip, mac, version, battery, and attributes. |
 | `void net_get_status(NetStatus *status)` | Snapshot for the debug API. |
 | `const char *net_base_topic()` | `wifi6_sensor/<device_id>`. |
 
@@ -222,7 +223,7 @@ Serial commands: `s` status, `p` toggle periodic status, `w` toggle stay awake, 
 
 Example output:
 ```
-[     1.204] BOOT WiFi6 Window Sensor fw=1.0.0 id=xiaoc5_a1b2c3 wake=reset boot=1 sleep=light
+[     1.204] BOOT WiFi6 Window Sensor fw=0.1 id=xiaoc5_a1b2c3 wake=reset boot=1 sleep=light
 [     1.210] APP window: input 'reed' on GPIO0
 [     1.230] WIFI connecting to 'myssid'
 [     2.911] WIFI connected ssid='myssid' ip=192.168.1.50 rssi=-61 ch=6 (1681 ms)
@@ -245,13 +246,16 @@ struct InputRuntime { uint8_t integrator, integrator_max; volatile bool active; 
 
 // sensor_net.cpp
 struct DiagnosticSensor { const char *object, *name, *unit, *dev_class, *icon; bool enabled; };
-// kDiagnostics: rssi, ssid, ip, mac, battery_voltage, battery
+// kDiagnostics: rssi, ssid, ip, mac, version, battery_voltage, battery
 
 // sensor_runtime.cpp
 const SensorBinaryEntity *g_entities[SENSOR_INPUT_MAX]; // indexed by input id
 bool     g_publish_all;          // publish every state + diagnostics (after connect / wake / heartbeat)
+bool     g_publish_diag;         // publish diagnostics after a state change
+bool     g_hold_after_full;      // woken by an input: hold awake once the full publish succeeded
 uint32_t g_pending_mask;         // bit per input: change not yet published
 uint32_t g_latched_active_mask;  // bit per input: went active since the last publish
+uint32_t g_awake_until_ms;       // no sleep before this time (boot window, state hold)
 ```
 
 RTC memory (survives deep sleep): `s_boot_count`, `s_sleep_count`, `s_discovery_sent`.
@@ -269,7 +273,8 @@ RTC memory (survives deep sleep): `s_boot_count`, `s_sleep_count`, `s_discovery_
 | `publish_attributes()` | sensor_net.cpp | JSON diagnostics. |
 | `build_device_id()` | sensor_runtime.cpp | `CFG_DEVICE_ID` or `xiaoc5_<MAC[3..5]>`. |
 | `publish_entity_discovery()` | sensor_runtime.cpp | Discovery handler: binary_sensor config of every registered entity. |
-| `publish_input(id, active)` / `publish_all()` | sensor_runtime.cpp | One entity state / diagnostics plus every entity state. |
+| `publish_input(id, active)` / `publish_all()` | sensor_runtime.cpp | One entity state / every entity state followed by the diagnostics. |
+| `hold_awake(duration_ms)` | sensor_runtime.cpp | Extends `g_awake_until_ms` (never shortens it). |
 | `handle_input_events()` | sensor_runtime.cpp | Drains the event queue, sets the pending and latched masks, and logs. |
 | `publish_pending()` | sensor_runtime.cpp | Publishes pending changes (active then inactive for latched short pulses), then the full state if requested. |
 | `maybe_sleep()` | sensor_runtime.cpp | Sleep decision and sleep/wake sequence. |
@@ -285,7 +290,7 @@ RTC memory (survives deep sleep): `s_boot_count`, `s_sleep_count`, `s_discovery_
 1. `debug_loop()`: serial commands and periodic status.
 2. `handle_input_events()`: debounced changes become pending bits.
 3. `net_loop()`: WiFi/MQTT state machine.
-4. `publish_pending()`: a new MQTT session sets `g_publish_all`. Pending inputs are published first, then the full state. In `SLEEP_MODE_NONE` a full publish is forced every `CFG_HEARTBEAT_S`.
+4. `publish_pending()`: a new MQTT session sets `g_publish_all`. Pending inputs are published first; each published change sets `g_publish_diag` and holds the device awake for `CFG_AWAKE_AFTER_STATE_MS`. Then the full state (states first, diagnostics after) or only the diagnostics are published. In `SLEEP_MODE_NONE` a full publish is forced every `CFG_HEARTBEAT_S`.
 5. `maybe_sleep()`.
 
 ### Debounce algorithm
@@ -295,7 +300,9 @@ RTC memory (survives deep sleep): `s_boot_count`, `s_sleep_count`, `s_discovery_
 - The timer uses `skip_unhandled_events` so there is no burst of callbacks after light sleep.
 
 ### Sleep sequence
-Sleep is entered when all of these hold: stay-awake is off, the boot window has expired, at least `CFG_AWAKE_AFTER_EVENT_MS` has passed since the last input change, all data is published, and the inputs are settled. It is also entered after `CFG_MAX_AWAKE_MS` regardless (e.g. broker unreachable).
+Sleep is entered when all of these hold: stay-awake is off, the boot window (`CFG_AWAKE_AFTER_BOOT_MS`) and the state hold (`CFG_AWAKE_AFTER_STATE_MS`) have expired, at least `CFG_AWAKE_AFTER_EVENT_MS` has passed since the last input change, all data is published, and the inputs are settled. It is also entered after `CFG_MAX_AWAKE_MS` regardless (e.g. broker unreachable), once no hold is active.
+
+State hold: after a published state change, or after the first full publish following an input wake-up (deep or light sleep), the device stays connected for `CFG_AWAKE_AFTER_STATE_MS` (20 s). Changes in this window are published in a few ms instead of waiting for a wake-up and reconnect (1 to 3 s). Every published change restarts the window. A timer wake-up does not start the hold.
 
 | Mode | Radio | Wake sources | After wake |
 |---|---|---|---|
@@ -332,7 +339,8 @@ The manual light sleep is used because `CONFIG_PM_ENABLE` (automatic light sleep
 ## Migration and Upgrade Scenarios
 - No persistent data (only RTC counters). Changing `CFG_DEVICE_ID` or `CFG_MQTT_BASE_TOPIC` creates new Home Assistant entities; remove the old retained topics on the broker.
 - `CFG_REED_ENABLED` / `CFG_IR_ENABLED` were removed: select the applications in [src/main.cpp](src/main.cpp). An entity of an application that is no longer initialized is not removed automatically (see [docs/mqtt_topics.md](docs/mqtt_topics.md)).
-- The new `ssid`, `ip`, and `mac` diagnostic entities are announced only after a power cycle, because discovery is sent once per power cycle.
+- The new `ssid`, `ip`, `mac`, and `version` diagnostic entities are announced only after a power cycle, because discovery is sent once per power cycle.
+- Firmware versioning restarts at `0.1` ([include/fw_version.h](include/fw_version.h)); the previous `CFG_FW_VERSION "1.0.0"` was removed.
 
 ## Limitations
 - D2 (GPIO25) cannot wake the chip from deep sleep; in `SLEEP_MODE_DEEP` motion is reported only while awake.

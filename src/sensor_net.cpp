@@ -76,6 +76,7 @@ const DiagnosticSensor kDiagnostics[] = {
     {"ssid", "WiFi network", nullptr, nullptr, "mdi:wifi", true},
     {"ip", "IP address", nullptr, nullptr, "mdi:ip-network", true},
     {"mac", "MAC address", nullptr, nullptr, "mdi:identifier", true},
+    {"version", "Firmware version", nullptr, nullptr, "mdi:chip", true},
     {"battery_voltage", "Battery voltage", "V", "voltage", nullptr, CFG_BATTERY_ENABLED},
     {"battery", "Battery", "%", "battery", nullptr, CFG_BATTERY_ENABLED},
 };
@@ -208,7 +209,7 @@ bool publish_attributes()
              WiFi.localIP().toString().c_str(), WiFi.RSSI(), WiFi.channel(), WiFi.BSSIDstr().c_str(),
              static_cast<unsigned long>(millis() / 1000), power_wake_reason_name(power_last_wake_reason()),
              static_cast<unsigned long>(power_boot_count()), static_cast<unsigned long>(power_sleep_count()),
-             power_sleep_mode_name(), CFG_FW_VERSION);
+             power_sleep_mode_name(), FW_VERSION);
     return publish_leaf("attributes", payload);
 }
 
@@ -251,7 +252,7 @@ void net_init(const char *device_id)
     snprintf(s_device_json, sizeof(s_device_json),
              "\"dev\":{\"ids\":[\"%s\"],\"name\":\"%s\",\"mdl\":\"XIAO ESP32-C5\","
              "\"mf\":\"Seeed Studio\",\"sw\":\"%s\"}",
-             s_device_id, CFG_DEVICE_NAME, CFG_FW_VERSION);
+             s_device_id, CFG_DEVICE_NAME, FW_VERSION);
 
     s_mqtt.setServer(SECRET_MQTT_HOST, SECRET_MQTT_PORT);
     s_mqtt.setBufferSize(CFG_MQTT_BUFFER_SIZE);
@@ -398,6 +399,7 @@ bool net_publish_diagnostics()
     ok = publish_leaf("ssid", WiFi.SSID().c_str()) && ok;
     ok = publish_leaf("ip", WiFi.localIP().toString().c_str()) && ok;
     ok = publish_leaf("mac", WiFi.macAddress().c_str()) && ok;
+    ok = publish_leaf("version", FW_VERSION) && ok;
 #if CFG_BATTERY_ENABLED
     char value[16];
     const uint32_t mv = battery_mv();
