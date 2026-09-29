@@ -95,7 +95,7 @@ mqtt:
       availability_topic: "apexha_sensor/xiaoc5_a1b2c3/availability"
       expire_after: 64800
   sensor:
-    - name: "Window sensor WiFi signal"
+    - name: "ApexHA C1 WiFi signal"
       state_topic: "apexha_sensor/xiaoc5_a1b2c3/rssi"
       unit_of_measurement: "dBm"
       device_class: signal_strength
@@ -103,31 +103,31 @@ mqtt:
       entity_category: diagnostic
       availability_topic: "apexha_sensor/xiaoc5_a1b2c3/availability"
       expire_after: 64800
-    - name: "Window sensor WiFi network"
+    - name: "ApexHA C1 WiFi network"
       state_topic: "apexha_sensor/xiaoc5_a1b2c3/ssid"
       icon: mdi:wifi
       entity_category: diagnostic
       availability_topic: "apexha_sensor/xiaoc5_a1b2c3/availability"
       expire_after: 64800
-    - name: "Window sensor IP address"
+    - name: "ApexHA C1 IP address"
       state_topic: "apexha_sensor/xiaoc5_a1b2c3/ip"
       icon: mdi:ip-network
       entity_category: diagnostic
       availability_topic: "apexha_sensor/xiaoc5_a1b2c3/availability"
       expire_after: 64800
-    - name: "Window sensor MAC address"
+    - name: "ApexHA C1 MAC address"
       state_topic: "apexha_sensor/xiaoc5_a1b2c3/mac"
       icon: mdi:identifier
       entity_category: diagnostic
       availability_topic: "apexha_sensor/xiaoc5_a1b2c3/availability"
       expire_after: 64800
-    - name: "Window sensor firmware version"
+    - name: "ApexHA C1 firmware version"
       state_topic: "apexha_sensor/xiaoc5_a1b2c3/version"
       icon: mdi:chip
       entity_category: diagnostic
       availability_topic: "apexha_sensor/xiaoc5_a1b2c3/availability"
       expire_after: 64800
-    - name: "Window sensor battery voltage"
+    - name: "ApexHA C1 battery voltage"
       state_topic: "apexha_sensor/xiaoc5_a1b2c3/battery_voltage"
       unit_of_measurement: "V"
       device_class: voltage
@@ -135,7 +135,7 @@ mqtt:
       entity_category: diagnostic
       availability_topic: "apexha_sensor/xiaoc5_a1b2c3/availability"
       expire_after: 64800
-    - name: "Window sensor battery"
+    - name: "ApexHA C1 battery"
       state_topic: "apexha_sensor/xiaoc5_a1b2c3/battery"
       unit_of_measurement: "%"
       device_class: battery
