@@ -38,10 +38,6 @@ void power_init()
     if (s_last_wake == WAKE_RESET) {
         s_sleep_count = 0;
     }
-#if CFG_SLEEP_MODE == SLEEP_MODE_DEEP
-    // Release the pad hold/RTC mux set before the previous deep sleep.
-    rtc_gpio_deinit(static_cast<gpio_num_t>(CFG_REED_PIN));
-#endif
 }
 
 WakeReason power_last_wake_reason()
@@ -84,14 +80,15 @@ uint32_t power_sleep_count()
     return s_sleep_count;
 }
 
+bool power_can_wake_from_deep_sleep(uint8_t pin)
+{
+    return rtc_gpio_is_valid_gpio(static_cast<gpio_num_t>(pin));
+}
+
 WakeReason power_light_sleep(uint32_t timer_s)
 {
     // Level wake-up on the opposite of the current level == wake on change.
-    for (uint8_t i = 0; i < SENSOR_INPUT_COUNT; i++) {
-        const SensorInput id = static_cast<SensorInput>(i);
-        if (!inputs_enabled(id)) {
-            continue;
-        }
+    for (uint8_t id = 0; id < inputs_count(); id++) {
         const gpio_num_t pin = static_cast<gpio_num_t>(inputs_pin(id));
         const gpio_int_type_t level = inputs_raw_level(id) ? GPIO_INTR_LOW_LEVEL : GPIO_INTR_HIGH_LEVEL;
         gpio_wakeup_enable(pin, level);
@@ -105,33 +102,35 @@ WakeReason power_light_sleep(uint32_t timer_s)
 
     s_last_wake = map_cause(esp_sleep_get_wakeup_cause());
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
-    for (uint8_t i = 0; i < SENSOR_INPUT_COUNT; i++) {
-        const SensorInput id = static_cast<SensorInput>(i);
-        if (inputs_enabled(id)) {
-            gpio_wakeup_disable(static_cast<gpio_num_t>(inputs_pin(id)));
-        }
+    for (uint8_t id = 0; id < inputs_count(); id++) {
+        gpio_wakeup_disable(static_cast<gpio_num_t>(inputs_pin(id)));
     }
     return s_last_wake;
 }
 
 void power_deep_sleep(uint32_t timer_s)
 {
-    const gpio_num_t pin = static_cast<gpio_num_t>(CFG_REED_PIN);
-    const esp_sleep_ext1_wakeup_mode_t mode =
-        digitalRead(CFG_REED_PIN) ? ESP_EXT1_WAKEUP_ANY_LOW : ESP_EXT1_WAKEUP_ANY_HIGH;
-
-    esp_sleep_enable_ext1_wakeup_io(1ULL << pin, mode);
-    esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(timer_s) * 1000000ULL);
-
-    // Keep the internal pull active on the LP pad while the digital domain is off.
+    // Keep the internal pulls active on the LP pads while the digital domain is off.
     esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
-    if (CFG_REED_PULL == INPUT_PULLUP) {
-        rtc_gpio_pulldown_dis(pin);
-        rtc_gpio_pullup_en(pin);
-    } else if (CFG_REED_PULL == INPUT_PULLDOWN) {
-        rtc_gpio_pullup_dis(pin);
-        rtc_gpio_pulldown_en(pin);
+    for (uint8_t id = 0; id < inputs_count(); id++) {
+        const gpio_num_t pin = static_cast<gpio_num_t>(inputs_pin(id));
+        if (!power_can_wake_from_deep_sleep(inputs_pin(id))) {
+            continue;
+        }
+        const esp_sleep_ext1_wakeup_mode_t mode =
+            inputs_raw_level(id) ? ESP_EXT1_WAKEUP_ANY_LOW : ESP_EXT1_WAKEUP_ANY_HIGH;
+        esp_sleep_enable_ext1_wakeup_io(1ULL << pin, mode);
+
+        const uint8_t pull = inputs_pull_mode(id);
+        if (pull == INPUT_PULLUP) {
+            rtc_gpio_pulldown_dis(pin);
+            rtc_gpio_pullup_en(pin);
+        } else if (pull == INPUT_PULLDOWN) {
+            rtc_gpio_pullup_dis(pin);
+            rtc_gpio_pulldown_en(pin);
+        }
     }
+    esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(timer_s) * 1000000ULL);
 
     Serial.flush();
     s_sleep_count++;

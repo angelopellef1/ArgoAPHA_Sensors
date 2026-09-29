@@ -2,7 +2,8 @@
 
 #include <stdint.h>
 
-#include "sensor_inputs.h"
+// Publishes the application entities' Home Assistant discovery; true = all sent.
+using NetDiscoveryHandler = bool (*)();
 
 struct NetStatus {
     bool radio_on;
@@ -24,7 +25,10 @@ void net_stop();
 void net_loop();
 bool net_mqtt_connected();
 bool net_mqtt_just_connected();
-bool net_publish_input(SensorInput id, bool active);
-bool net_publish_all();
+bool net_publish_state(const char *leaf, const char *payload);
+bool net_publish_binary_discovery(const char *object, const char *label, const char *device_class,
+                                  const char *payload_on, const char *payload_off);
+void net_set_discovery_handler(NetDiscoveryHandler handler);
+bool net_publish_diagnostics();
 void net_get_status(NetStatus *status);
 const char *net_base_topic();

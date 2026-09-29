@@ -1,6 +1,7 @@
 #include "sensor_inputs.h"
 
 #include <Arduino.h>
+#include <driver/rtc_io.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
@@ -9,48 +10,30 @@
 
 namespace {
 
-struct InputConfig {
-    bool enabled;
-    uint8_t pin;
-    uint8_t pull_mode;
-    uint8_t active_level;
-    uint16_t debounce_ms;
-    const char *name;
-    const char *active_name;
-    const char *inactive_name;
-};
-
 struct InputRuntime {
     uint8_t integrator;
     uint8_t integrator_max;
     volatile bool active;
 };
 
-const InputConfig kConfig[SENSOR_INPUT_COUNT] = {
-    {CFG_REED_ENABLED, CFG_REED_PIN, CFG_REED_PULL, CFG_REED_OPEN_LEVEL, CFG_REED_DEBOUNCE_MS, "reed", "open", "closed"},
-    {CFG_IR_ENABLED, CFG_IR_PIN, CFG_IR_PULL, CFG_IR_ACTIVE_LEVEL, CFG_IR_DEBOUNCE_MS, "ir", "detected", "clear"},
-};
-
 constexpr UBaseType_t kQueueLength = 16;
 
-InputRuntime s_runtime[SENSOR_INPUT_COUNT];
+const SensorInputConfig *s_config[SENSOR_INPUT_MAX];
+InputRuntime s_runtime[SENSOR_INPUT_MAX];
+uint8_t s_count = 0;
 QueueHandle_t s_queue = nullptr;
 esp_timer_handle_t s_timer = nullptr;
 
-bool read_active(SensorInput id)
+bool read_active(uint8_t id)
 {
-    return digitalRead(kConfig[id].pin) == kConfig[id].active_level;
+    return digitalRead(s_config[id]->pin) == s_config[id]->active_level;
 }
 
 // Integrator debounce: the output flips only after the integrator saturates,
 // which needs debounce_ms of (mostly) consistent samples.
 void sample_callback(void *)
 {
-    for (uint8_t i = 0; i < SENSOR_INPUT_COUNT; i++) {
-        const SensorInput id = static_cast<SensorInput>(i);
-        if (!kConfig[id].enabled) {
-            continue;
-        }
+    for (uint8_t id = 0; id < s_count; id++) {
         InputRuntime &rt = s_runtime[id];
         if (read_active(id)) {
             if (rt.integrator < rt.integrator_max) {
@@ -77,31 +60,38 @@ void sample_callback(void *)
 
 }  // namespace
 
-void inputs_init()
+int inputs_add(const SensorInputConfig *config)
 {
-    s_queue = xQueueCreate(kQueueLength, sizeof(SensorInputEvent));
-
-    for (uint8_t i = 0; i < SENSOR_INPUT_COUNT; i++) {
-        const SensorInput id = static_cast<SensorInput>(i);
-        if (!kConfig[id].enabled) {
-            continue;
-        }
-        pinMode(kConfig[id].pin, kConfig[id].pull_mode);
-        InputRuntime &rt = s_runtime[id];
-        uint32_t max = kConfig[id].debounce_ms / CFG_DEBOUNCE_SAMPLE_MS;
-        rt.integrator_max = static_cast<uint8_t>(constrain(max, 1U, 255U));
+    // The sampling timer iterates without locking, so the table is frozen once started.
+    if (s_timer != nullptr || s_count >= SENSOR_INPUT_MAX) {
+        return -1;
     }
+    const uint8_t id = s_count;
+    const gpio_num_t pin = static_cast<gpio_num_t>(config->pin);
+    if (rtc_gpio_is_valid_gpio(pin)) {
+        // Release the pad hold/RTC mux left by a deep-sleep wake-up.
+        rtc_gpio_deinit(pin);
+    }
+    pinMode(config->pin, config->pull_mode);
+    s_config[id] = config;
+    InputRuntime &rt = s_runtime[id];
+    const uint32_t max = config->debounce_ms / CFG_DEBOUNCE_SAMPLE_MS;
+    rt.integrator_max = static_cast<uint8_t>(constrain(max, 1U, 255U));
 
-    // Let the pull resistors settle before seeding the debouncer.
+    // Let the pull resistor settle before seeding the debouncer.
     delay(2);
-    for (uint8_t i = 0; i < SENSOR_INPUT_COUNT; i++) {
-        const SensorInput id = static_cast<SensorInput>(i);
-        if (kConfig[id].enabled) {
-            InputRuntime &rt = s_runtime[id];
-            rt.active = read_active(id);
-            rt.integrator = rt.active ? rt.integrator_max : 0;
-        }
+    rt.active = read_active(id);
+    rt.integrator = rt.active ? rt.integrator_max : 0;
+    s_count++;
+    return id;
+}
+
+void inputs_start()
+{
+    if (s_timer != nullptr) {
+        return;
     }
+    s_queue = xQueueCreate(kQueueLength, sizeof(SensorInputEvent));
 
     esp_timer_create_args_t args = {};
     args.callback = sample_callback;
@@ -112,22 +102,27 @@ void inputs_init()
     esp_timer_start_periodic(s_timer, CFG_DEBOUNCE_SAMPLE_MS * 1000ULL);
 }
 
-bool inputs_enabled(SensorInput id)
+uint8_t inputs_count()
 {
-    return id < SENSOR_INPUT_COUNT && kConfig[id].enabled;
+    return s_count;
 }
 
-uint8_t inputs_pin(SensorInput id)
+uint8_t inputs_pin(uint8_t id)
 {
-    return kConfig[id].pin;
+    return s_config[id]->pin;
 }
 
-int inputs_raw_level(SensorInput id)
+uint8_t inputs_pull_mode(uint8_t id)
 {
-    return digitalRead(kConfig[id].pin);
+    return s_config[id]->pull_mode;
 }
 
-bool inputs_get_state(SensorInput id)
+int inputs_raw_level(uint8_t id)
+{
+    return digitalRead(s_config[id]->pin);
+}
+
+bool inputs_get_state(uint8_t id)
 {
     return s_runtime[id].active;
 }
@@ -142,11 +137,7 @@ bool inputs_is_settled()
     if (s_queue != nullptr && uxQueueMessagesWaiting(s_queue) > 0) {
         return false;
     }
-    for (uint8_t i = 0; i < SENSOR_INPUT_COUNT; i++) {
-        const SensorInput id = static_cast<SensorInput>(i);
-        if (!kConfig[id].enabled) {
-            continue;
-        }
+    for (uint8_t id = 0; id < s_count; id++) {
         const InputRuntime &rt = s_runtime[id];
         const bool saturated = rt.integrator == 0 || rt.integrator == rt.integrator_max;
         if (!saturated || read_active(id) != rt.active) {
@@ -156,12 +147,12 @@ bool inputs_is_settled()
     return true;
 }
 
-const char *inputs_name(SensorInput id)
+const char *inputs_name(uint8_t id)
 {
-    return kConfig[id].name;
+    return s_config[id]->name;
 }
 
-const char *inputs_state_name(SensorInput id, bool active)
+const char *inputs_state_name(uint8_t id, bool active)
 {
-    return active ? kConfig[id].active_name : kConfig[id].inactive_name;
+    return active ? s_config[id]->active_name : s_config[id]->inactive_name;
 }

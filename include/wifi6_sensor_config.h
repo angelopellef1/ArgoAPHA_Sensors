@@ -2,24 +2,25 @@
 
 #include <Arduino.h>
 
+#include "fw_version.h"
+
 // ---------------------------------------------------------------------------
-// Firmware identity
+// Firmware identity (version: include/fw_version.h)
 // ---------------------------------------------------------------------------
-#define CFG_FW_VERSION              "1.0.0"
 #define CFG_DEVICE_NAME             "WiFi6 Window Sensor"
 // Empty string -> auto "xiaoc5_<last 3 MAC bytes>"
 #define CFG_DEVICE_ID               ""
 
 // ---------------------------------------------------------------------------
-// Inputs (1 = enabled, 0 = disabled)
+// Applications (select them in src/main.cpp: app_window_init(), app_motion_init())
 // ---------------------------------------------------------------------------
-#define CFG_REED_ENABLED            1
+// Window contact application (src/app_window.cpp)
 #define CFG_REED_PIN                D1              // GPIO0, LP GPIO (deep-sleep wake capable)
 #define CFG_REED_PULL               INPUT           // external 1 MOhm pull-up to 3V3 (see docs/reed_wiring.md)
 #define CFG_REED_OPEN_LEVEL         HIGH            // magnet away -> contact open -> pulled HIGH
 #define CFG_REED_DEBOUNCE_MS        50
 
-#define CFG_IR_ENABLED              0
+// Motion (IR) application (src/app_motion.cpp)
 #define CFG_IR_PIN                  D2              // GPIO25, light-sleep wake only
 #define CFG_IR_PULL                 INPUT_PULLDOWN  // PIR push-pull output; use INPUT_PULLUP for open-collector sensors
 #define CFG_IR_ACTIVE_LEVEL         HIGH            // level when motion/IR is detected
@@ -32,13 +33,14 @@
 // ---------------------------------------------------------------------------
 #define SLEEP_MODE_NONE             0   // always on, WiFi modem sleep
 #define SLEEP_MODE_LIGHT            1   // WiFi off + light sleep, wake on any enabled input or heartbeat
-#define SLEEP_MODE_DEEP             2   // deep sleep, wake on reed (D1) or heartbeat only
+#define SLEEP_MODE_DEEP             2   // deep sleep, wake on LP GPIO inputs (D1 reed) or heartbeat only
 
 #ifndef CFG_SLEEP_MODE
 #define CFG_SLEEP_MODE              SLEEP_MODE_DEEP
 #endif
 #define CFG_AWAKE_AFTER_BOOT_MS     60000   // stay awake after reset so USB flashing/debug is possible
 #define CFG_AWAKE_AFTER_EVENT_MS    2000    // minimum awake time after the last input change
+#define CFG_AWAKE_AFTER_STATE_MS    20000   // stay connected after a published state change for fast follow-up changes
 #define CFG_MAX_AWAKE_MS            30000   // give up publishing and sleep anyway after this time
 #define CFG_HEARTBEAT_S             21600   // 6 h periodic state republish / timer wake-up
 
@@ -80,18 +82,3 @@
 #endif
 #define CFG_DEBUG_BAUD              115200
 #define CFG_DEBUG_STATUS_PERIOD_MS  5000
-
-// ---------------------------------------------------------------------------
-// Sanity checks
-// ---------------------------------------------------------------------------
-#if !CFG_REED_ENABLED && !CFG_IR_ENABLED
-#error "At least one input must be enabled"
-#endif
-
-#if CFG_SLEEP_MODE == SLEEP_MODE_DEEP && CFG_IR_ENABLED
-#warning "IR input (D2/GPIO25) cannot wake from deep sleep: motion is only reported while awake"
-#endif
-
-#if CFG_SLEEP_MODE == SLEEP_MODE_DEEP && !CFG_REED_ENABLED
-#error "Deep sleep requires the reed input as wake source"
-#endif

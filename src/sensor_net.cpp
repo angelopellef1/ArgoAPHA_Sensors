@@ -60,10 +60,26 @@ bool s_scan_done = false;
 
 // Survives deep sleep so discovery is sent once per power cycle.
 RTC_DATA_ATTR bool s_discovery_sent = false;
+NetDiscoveryHandler s_discovery_handler = nullptr;
 
-const char *const kInputObject[SENSOR_INPUT_COUNT] = {"window", "motion"};
-const char *const kInputLabel[SENSOR_INPUT_COUNT] = {"Window", "Motion"};
-const char *const kInputClass[SENSOR_INPUT_COUNT] = {"window", "motion"};
+struct DiagnosticSensor {
+    const char *object;
+    const char *name;
+    const char *unit;       // nullptr for text sensors
+    const char *dev_class;
+    const char *icon;
+    bool enabled;
+};
+
+const DiagnosticSensor kDiagnostics[] = {
+    {"rssi", "WiFi signal", "dBm", "signal_strength", nullptr, true},
+    {"ssid", "WiFi network", nullptr, nullptr, "mdi:wifi", true},
+    {"ip", "IP address", nullptr, nullptr, "mdi:ip-network", true},
+    {"mac", "MAC address", nullptr, nullptr, "mdi:identifier", true},
+    {"version", "Firmware version", nullptr, nullptr, "mdi:chip", true},
+    {"battery_voltage", "Battery voltage", "V", "voltage", nullptr, CFG_BATTERY_ENABLED},
+    {"battery", "Battery", "%", "battery", nullptr, CFG_BATTERY_ENABLED},
+};
 
 bool publish_leaf(const char *leaf, const char *payload)
 {
@@ -146,53 +162,40 @@ void wifi_begin()
     debug_log("WIFI connecting to '%s' (%s)", net.ssid, band_name(net.band));
 }
 
-bool publish_binary_discovery(SensorInput id)
+bool publish_sensor_discovery(const DiagnosticSensor &sensor)
 {
     char topic[128];
-    snprintf(topic, sizeof(topic), "%s/binary_sensor/%s/%s/config",
-             CFG_HA_DISCOVERY_PREFIX, s_device_id, kInputObject[id]);
-    if (!inputs_enabled(id)) {
+    snprintf(topic, sizeof(topic), "%s/sensor/%s/%s/config", CFG_HA_DISCOVERY_PREFIX, s_device_id, sensor.object);
+    if (!sensor.enabled) {
         // Empty retained config removes a previously announced entity.
         return s_mqtt.publish(topic, "", true);
     }
 
-    char payload[640];
-    snprintf(payload, sizeof(payload),
-             "{\"name\":\"%s\",\"uniq_id\":\"%s_%s\",\"stat_t\":\"%s/%s\","
-             "\"pl_on\":\"%s\",\"pl_off\":\"%s\",\"dev_cla\":\"%s\","
-             "\"avty_t\":\"%s\",\"exp_aft\":%lu,\"json_attr_t\":\"%s/attributes\",%s}",
-             kInputLabel[id], s_device_id, kInputObject[id], s_base, kInputObject[id],
-             inputs_state_name(id, true), inputs_state_name(id, false), kInputClass[id],
-             s_availability_topic, static_cast<unsigned long>(kExpireAfterS), s_base, s_device_json);
-    return s_mqtt.publish(topic, payload, true);
-}
-
-bool publish_sensor_discovery(const char *object, const char *name, const char *unit, const char *dev_class,
-                              bool enabled)
-{
-    char topic[128];
-    snprintf(topic, sizeof(topic), "%s/sensor/%s/%s/config", CFG_HA_DISCOVERY_PREFIX, s_device_id, object);
-    if (!enabled) {
-        return s_mqtt.publish(topic, "", true);
+    char kind[128];
+    if (sensor.unit != nullptr) {
+        snprintf(kind, sizeof(kind), "\"unit_of_meas\":\"%s\",\"dev_cla\":\"%s\",\"stat_cla\":\"measurement\"",
+                 sensor.unit, sensor.dev_class);
+    } else {
+        snprintf(kind, sizeof(kind), "\"ic\":\"%s\"", sensor.icon);
     }
 
     char payload[640];
     snprintf(payload, sizeof(payload),
-             "{\"name\":\"%s\",\"uniq_id\":\"%s_%s\",\"stat_t\":\"%s/%s\","
-             "\"unit_of_meas\":\"%s\",\"dev_cla\":\"%s\",\"stat_cla\":\"measurement\","
+             "{\"name\":\"%s\",\"uniq_id\":\"%s_%s\",\"stat_t\":\"%s/%s\",%s,"
              "\"ent_cat\":\"diagnostic\",\"avty_t\":\"%s\",\"exp_aft\":%lu,%s}",
-             name, s_device_id, object, s_base, object, unit, dev_class, s_availability_topic,
+             sensor.name, s_device_id, sensor.object, s_base, sensor.object, kind, s_availability_topic,
              static_cast<unsigned long>(kExpireAfterS), s_device_json);
     return s_mqtt.publish(topic, payload, true);
 }
 
 bool publish_discovery()
 {
-    bool ok = publish_sensor_discovery("rssi", "WiFi signal", "dBm", "signal_strength", true);
-    ok = publish_sensor_discovery("battery_voltage", "Battery voltage", "V", "voltage", CFG_BATTERY_ENABLED) && ok;
-    ok = publish_sensor_discovery("battery", "Battery", "%", "battery", CFG_BATTERY_ENABLED) && ok;
-    for (uint8_t i = 0; i < SENSOR_INPUT_COUNT; i++) {
-        ok = publish_binary_discovery(static_cast<SensorInput>(i)) && ok;
+    bool ok = true;
+    for (const DiagnosticSensor &sensor : kDiagnostics) {
+        ok = publish_sensor_discovery(sensor) && ok;
+    }
+    if (s_discovery_handler != nullptr) {
+        ok = s_discovery_handler() && ok;
     }
     return ok;
 }
@@ -206,7 +209,7 @@ bool publish_attributes()
              WiFi.localIP().toString().c_str(), WiFi.RSSI(), WiFi.channel(), WiFi.BSSIDstr().c_str(),
              static_cast<unsigned long>(millis() / 1000), power_wake_reason_name(power_last_wake_reason()),
              static_cast<unsigned long>(power_boot_count()), static_cast<unsigned long>(power_sleep_count()),
-             power_sleep_mode_name(), CFG_FW_VERSION);
+             power_sleep_mode_name(), FW_VERSION);
     return publish_leaf("attributes", payload);
 }
 
@@ -249,7 +252,7 @@ void net_init(const char *device_id)
     snprintf(s_device_json, sizeof(s_device_json),
              "\"dev\":{\"ids\":[\"%s\"],\"name\":\"%s\",\"mdl\":\"XIAO ESP32-C5\","
              "\"mf\":\"Seeed Studio\",\"sw\":\"%s\"}",
-             s_device_id, CFG_DEVICE_NAME, CFG_FW_VERSION);
+             s_device_id, CFG_DEVICE_NAME, FW_VERSION);
 
     s_mqtt.setServer(SECRET_MQTT_HOST, SECRET_MQTT_PORT);
     s_mqtt.setBufferSize(CFG_MQTT_BUFFER_SIZE);
@@ -359,17 +362,33 @@ bool net_mqtt_just_connected()
     return value;
 }
 
-bool net_publish_input(SensorInput id, bool active)
+bool net_publish_state(const char *leaf, const char *payload)
 {
-    if (!net_mqtt_connected() || !inputs_enabled(id)) {
-        return false;
-    }
-    const bool ok = publish_leaf(kInputObject[id], inputs_state_name(id, active));
-    debug_log("MQTT %s/%s = %s %s", s_base, kInputObject[id], inputs_state_name(id, active), ok ? "ok" : "FAILED");
-    return ok;
+    return net_mqtt_connected() && publish_leaf(leaf, payload);
 }
 
-bool net_publish_all()
+bool net_publish_binary_discovery(const char *object, const char *label, const char *device_class,
+                                  const char *payload_on, const char *payload_off)
+{
+    char topic[128];
+    snprintf(topic, sizeof(topic), "%s/binary_sensor/%s/%s/config", CFG_HA_DISCOVERY_PREFIX, s_device_id, object);
+
+    char payload[640];
+    snprintf(payload, sizeof(payload),
+             "{\"name\":\"%s\",\"uniq_id\":\"%s_%s\",\"stat_t\":\"%s/%s\","
+             "\"pl_on\":\"%s\",\"pl_off\":\"%s\",\"dev_cla\":\"%s\","
+             "\"avty_t\":\"%s\",\"exp_aft\":%lu,\"json_attr_t\":\"%s/attributes\",%s}",
+             label, s_device_id, object, s_base, object, payload_on, payload_off, device_class,
+             s_availability_topic, static_cast<unsigned long>(kExpireAfterS), s_base, s_device_json);
+    return s_mqtt.publish(topic, payload, true);
+}
+
+void net_set_discovery_handler(NetDiscoveryHandler handler)
+{
+    s_discovery_handler = handler;
+}
+
+bool net_publish_diagnostics()
 {
     if (!net_mqtt_connected()) {
         return false;
@@ -377,6 +396,10 @@ bool net_publish_all()
     char rssi[8];
     snprintf(rssi, sizeof(rssi), "%d", WiFi.RSSI());
     bool ok = publish_leaf("rssi", rssi);
+    ok = publish_leaf("ssid", WiFi.SSID().c_str()) && ok;
+    ok = publish_leaf("ip", WiFi.localIP().toString().c_str()) && ok;
+    ok = publish_leaf("mac", WiFi.macAddress().c_str()) && ok;
+    ok = publish_leaf("version", FW_VERSION) && ok;
 #if CFG_BATTERY_ENABLED
     char value[16];
     const uint32_t mv = battery_mv();
@@ -386,14 +409,7 @@ bool net_publish_all()
     snprintf(value, sizeof(value), "%u", battery_percent());
     ok = publish_leaf("battery", value) && ok;
 #endif
-    ok = publish_attributes() && ok;
-    for (uint8_t i = 0; i < SENSOR_INPUT_COUNT; i++) {
-        const SensorInput id = static_cast<SensorInput>(i);
-        if (inputs_enabled(id)) {
-            ok = net_publish_input(id, inputs_get_state(id)) && ok;
-        }
-    }
-    return ok;
+    return publish_attributes() && ok;
 }
 
 void net_get_status(NetStatus *status)
